@@ -1,6 +1,7 @@
 package httpoverdns
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -27,34 +28,42 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 
 		fmt.Println(domain)
 
-		bdecoded, err := base64.Encoding.Strict(*base64.RawStdEncoding).DecodeString(strings.TrimSuffix(domain, ".l."))
+		bdecoded, err := base64.Encoding.Strict(*base64.StdEncoding).DecodeString(strings.ReplaceAll(strings.TrimSuffix(domain, ".l."), "_", "="))
 
-		fmt.Println(err)
-
-		text := ""
+		text := []byte("")
 
 		if err != nil {
-			text = err.Error()
+			text = []byte("1." + err.Error())
 		} else {
+			// decoded := strings.TrimSpace(string(bdecoded))
 			decoded := string(bdecoded)
 
-			fmt.Println(decoded)
+			fmt.Println("decoded: " + decoded)
 
-			resp, err := http.Get(decoded)
-
-			fmt.Println(resp.StatusCode)
+			req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(decoded)))
 
 			if err != nil {
-				text = err.Error()
+				text = []byte("2." + err.Error())
 			} else {
-				body, err := io.ReadAll(resp.Body)
 
-				// fmt.Println(string(body))
+				client := &http.Client{}
+
+				resp, err := client.Do(req)
+
+				fmt.Println(resp.StatusCode)
 
 				if err != nil {
-					text = err.Error()
+					text = []byte("3." + err.Error())
 				} else {
-					text = base64.RawStdEncoding.EncodeToString(body)
+					defer resp.Body.Close()
+
+					body, err := io.ReadAll(resp.Body)
+
+					if err != nil {
+						text = []byte("4." + err.Error())
+					} else {
+						text = body
+					}
 				}
 			}
 		}
@@ -64,7 +73,7 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 
 		header := dns.RR_Header{Name: state.QName(), Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0}
 
-		chunks := splitText(text, 255)
+		chunks := splitText(strings.ReplaceAll(base64.StdEncoding.EncodeToString(text), "=", "_"), 255)
 
 		for _, chunk := range chunks {
 			txtRecord := &dns.TXT{Hdr: header, Txt: []string{chunk}}

@@ -10,6 +10,20 @@ resolver = dns.resolver.Resolver(configure=False)
 resolver.nameservers = ['127.0.0.1']
 
 class HTTPProxy(BaseHTTPRequestHandler):
+    def get_raw_request(self):
+        # raw_request = self.raw_requestline
+        # raw_request += b'\r\n' + self.headers.as_bytes()
+        # raw_request += b'\r\n\r\n' + self.rfile.read(int(self.headers['Content-Length']))
+
+        raw_request = self.raw_requestline + b'\r\n' + self.headers.as_bytes()
+
+        content_length = self.headers.get('Content-Length')
+        if content_length:
+            raw_request += b'\r\n\r\n' + self.rfile.read(int(content_length))
+
+        return raw_request
+
+
     def do_GET(self):
         self.handle_request()
 
@@ -23,16 +37,19 @@ class HTTPProxy(BaseHTTPRequestHandler):
         self.handle_request()
 
     def handle_request(self):
-        domain = base64.b64encode(self.raw_requestline).decode('utf-8').replace('=', '') + '.l'
+        print("RAW:", self.get_raw_request())
+        domain = base64.b64encode(self.get_raw_request()).decode('utf-8').replace('=', '_') + '.l'
         print(domain)
         try:
-            r = resolver.query(domain, 'TXT')
+            r = resolver.resolve(domain, 'TXT')
 
             rep = ''
 
             for i in r.response.answer:
                 for j in i.items:
-                    rep += j.to_text()
+                    rep += j.to_text().replace('_', '=')
+
+            print(rep)
 
             response = base64.b64decode(rep)
 
