@@ -1,0 +1,9 @@
+services:
+  coredns:
+    container_name: coredns
+    image: coredns/coredns:latest
+    command: " -conf /root/Corefile"
+    ports:
+    - 127.0.0.1:5354:53/udp
+    volumes:
+    - ./config:/root/

@@ -1,0 +1,5 @@
+.:53 {
+  forward . 1.1.1.1
+  log
+  errors
+}
