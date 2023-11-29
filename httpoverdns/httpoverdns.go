@@ -2,6 +2,7 @@ package httpoverdns
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -19,6 +20,8 @@ type HTTPOverDNS struct {
 	Next plugin.Handler
 }
 
+var cache map[string]string = make(map[string]string)
+
 func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	state := request.Request{W: w, Req: r}
 
@@ -34,18 +37,16 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 
 		fmt.Println(parts)
 
-		chunks, exists := ctx.Value(uid).(string)
+		chunks, exists := cache[uid]
 		if !exists {
 			chunks = ""
 		}
 
 		chunks += chunk
 
-		fmt.Println(chunks)
+		cache[uid] = chunks
 
-		ctx = context.WithValue(ctx, uid, chunks)
-
-		text := []byte("")
+		var text []byte
 
 		if !isLastChunk {
 			text = []byte("OK")
@@ -55,16 +56,21 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 			if err != nil {
 				text = []byte("1." + err.Error())
 			} else {
-				// decoded := strings.TrimSpace(string(bdecoded))
 				decoded := string(bdecoded)
 
-				req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(decoded)))
+				fmt.Println(decoded)
+
+				req, err := ParseHTTPRequest(decoded)
+
+				fmt.Println(req)
 
 				if err != nil {
 					text = []byte("2." + err.Error())
 				} else {
 
-					client := &http.Client{}
+					client := &http.Client{
+						// Transport: &http2.Transport{},
+					}
 
 					resp, err := client.Do(req)
 
@@ -122,4 +128,47 @@ func splitText(text string, n int) []string {
 		chunks = append(chunks, text[i:end])
 	}
 	return chunks
+}
+
+func ParseHTTPRequest(rawRequest string) (*http.Request, error) {
+	reader := bufio.NewReader(strings.NewReader(rawRequest))
+
+	firstLine, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Fields(firstLine)
+	method := parts[0]
+	url := parts[1]
+
+	headers := make(http.Header)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil || line == "\r\n" {
+			break
+		}
+		headerParts := strings.SplitN(line, ":", 2)
+		if len(headerParts) == 2 {
+			key := strings.TrimSpace(headerParts[0])
+			value := strings.TrimSpace(headerParts[1])
+			headers.Add(key, value)
+		}
+	}
+
+	bodyBytes, err := reader.ReadBytes(0)
+	if err != nil {
+		return nil, err
+	}
+	body := bytes.NewBuffer(bodyBytes)
+
+	// Create a new request
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set the headers
+	req.Header = headers
+
+	return req, nil
 }
