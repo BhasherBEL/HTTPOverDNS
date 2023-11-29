@@ -16,10 +16,6 @@ def split_string_into_chunks(input_string, chunk_size):
 
 class HTTPProxy(BaseHTTPRequestHandler):
     def get_raw_request(self):
-        # raw_request = self.raw_requestline
-        # raw_request += b'\r\n' + self.headers.as_bytes()
-        # raw_request += b'\r\n\r\n' + self.rfile.read(int(self.headers['Content-Length']))
-
         raw_request = self.raw_requestline + b'\r\n' + self.headers.as_bytes()
 
         content_length = self.headers.get('Content-Length')
@@ -42,32 +38,31 @@ class HTTPProxy(BaseHTTPRequestHandler):
         self.handle_request()
 
     def handle_request(self):
-        print("RAW:", self.get_raw_request())
         content = base64.b64encode(self.get_raw_request()).decode('utf-8').replace('=', '_')
 
         rid = random.randint(0, 99999)
 
         chunks = split_string_into_chunks(content, 53)
 
-        try:
-            for i, chunk in enumerate(chunks):
-                domain = f'{rid}.{int(i == len(chunks)-1)}.{chunk}.l' 
-                r = resolver.resolve(domain, 'TXT')
-            
-            rep = ''
+        # try:
+        for i, chunk in enumerate(chunks):
+            domain = f'{rid}.{int(i == len(chunks)-1)}.{chunk}.l' 
+            r = resolver.resolve(domain, 'TXT', lifetime=10)
+        
+        rep = ''
 
-            for i in r.response.answer:
-                for j in i.items:
-                    rep += j.to_text().replace('_', '=')
+        for i in r.response.answer:
+            for j in i.items:
+                rep += j.to_text().replace('_', '=')
 
-            response = base64.b64decode(rep)
+        response = base64.b64decode(rep + '==')
 
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(response)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(response)
 
-        except Exception as e:
-            self.send_error(500, str(e))
+        # except Exception as e:
+        #     self.send_error(500, str(e))
 
 httpd = HTTPServer(('', PORT), HTTPProxy)
 print("Now serving at", PORT)

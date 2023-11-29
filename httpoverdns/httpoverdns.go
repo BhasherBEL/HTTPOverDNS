@@ -2,12 +2,12 @@ package httpoverdns
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/coredns/coredns/plugin"
@@ -21,6 +21,7 @@ type HTTPOverDNS struct {
 }
 
 var cache map[string]string = make(map[string]string)
+var history map[string]int = make(map[string]int)
 
 func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	state := request.Request{W: w, Req: r}
@@ -28,6 +29,14 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 	domain := r.Question[0].Name
 
 	if state.QType() == dns.TypeTXT && strings.HasSuffix(domain, ".l.") {
+
+		_, inHistory := history[domain]
+
+		if inHistory {
+			return 0, nil
+		} else {
+			history[domain] = 0
+		}
 
 		parts := strings.Split(strings.TrimSuffix(domain, ".l."), ".")
 
@@ -51,46 +60,12 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 		if !isLastChunk {
 			text = []byte("OK")
 		} else {
-			bdecoded, err := base64.Encoding.Strict(*base64.StdEncoding).DecodeString(strings.ReplaceAll(strings.TrimSuffix(chunks, ".l."), "_", "="))
+			var err error
+
+			text, err = decodeAndGetAnswer(chunks)
 
 			if err != nil {
-				text = []byte("1." + err.Error())
-			} else {
-				decoded := string(bdecoded)
-
-				fmt.Println(decoded)
-
-				req, err := ParseHTTPRequest(decoded)
-
-				fmt.Println(req)
-
-				if err != nil {
-					text = []byte("2." + err.Error())
-				} else {
-
-					client := &http.Client{
-						// Transport: &http2.Transport{},
-					}
-
-					resp, err := client.Do(req)
-
-					fmt.Println(resp.StatusCode)
-
-					if err != nil {
-						text = []byte("3." + err.Error())
-					} else {
-						defer resp.Body.Close()
-
-						body, err := io.ReadAll(resp.Body)
-
-						if err != nil {
-							text = []byte("4." + err.Error())
-						} else {
-							text = body
-							fmt.Println("Response")
-						}
-					}
-				}
+				text = []byte(err.Error())
 			}
 		}
 
@@ -99,7 +74,11 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 
 		header := dns.RR_Header{Name: state.QName(), Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0}
 
-		rchunks := splitText(strings.ReplaceAll(base64.StdEncoding.EncodeToString(text), "=", "_"), 255)
+		if len(text) > 350 {
+			text = text[:350]
+		}
+
+		rchunks := splitText(base64.RawStdEncoding.EncodeToString(text), 255)
 
 		for _, rchunk := range rchunks {
 			txtRecord := &dns.TXT{Hdr: header, Txt: []string{rchunk}}
@@ -107,6 +86,9 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 		}
 
 		w.WriteMsg(msg)
+
+		// fmt.Println("Answer lengths:" + len(msg.Answer))
+		fmt.Println("Answer length: " + strconv.Itoa(len(msg.Answer)))
 
 		return 0, nil
 
@@ -130,45 +112,59 @@ func splitText(text string, n int) []string {
 	return chunks
 }
 
-func ParseHTTPRequest(rawRequest string) (*http.Request, error) {
+func decodeAndGetAnswer(encoded string) ([]byte, error) {
+	bdecoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(strings.TrimSuffix(encoded, ".l."), "_", "="))
+
+	if err != nil {
+		return nil, err
+	}
+
+	decoded := string(bdecoded)
+
+	req, err := ParseHTTPRequest2(decoded)
+	// req, err = http.NewRequest("GET", "http://httpforever.com", nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{
+		// Transport: &http2.Transport{},
+	}
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+
+	fmt.Println(resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
+}
+func ParseHTTPRequest2(rawRequest string) (*http.Request, error) {
 	reader := bufio.NewReader(strings.NewReader(rawRequest))
 
-	firstLine, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.Fields(firstLine)
-	method := parts[0]
-	url := parts[1]
+	req, err := http.ReadRequest(reader)
 
-	headers := make(http.Header)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" {
-			break
-		}
-		headerParts := strings.SplitN(line, ":", 2)
-		if len(headerParts) == 2 {
-			key := strings.TrimSpace(headerParts[0])
-			value := strings.TrimSpace(headerParts[1])
-			headers.Add(key, value)
-		}
-	}
-
-	bodyBytes, err := reader.ReadBytes(0)
-	if err != nil {
-		return nil, err
-	}
-	body := bytes.NewBuffer(bodyBytes)
-
-	// Create a new request
-	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
 	}
 
-	// Set the headers
-	req.Header = headers
+	clientReq := &http.Request{
+		Method: req.Method,
+		URL:    req.URL,
+		Header: req.Header,
+		Body:   req.Body,
+	}
 
-	return req, nil
+	return clientReq, nil
 }
