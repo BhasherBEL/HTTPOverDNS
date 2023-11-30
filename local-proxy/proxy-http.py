@@ -4,6 +4,7 @@ import shutil
 import dns.resolver
 import base64
 import random
+import time
 
 PORT = 1080
 
@@ -49,13 +50,25 @@ class HTTPProxy(BaseHTTPRequestHandler):
             domain = f'{rid}.{int(i == len(chunks)-1)}.{chunk}.l' 
             r = resolver.resolve(domain, 'TXT', lifetime=10)
         
-        rep = ''
-
         for i in r.response.answer:
             for j in i.items:
-                rep += j.to_text().replace('_', '=')
+                rep = j.to_text().replace('"', '')
+        
+        isLastChunk, encoded = rep[:2], rep[2:]
 
-        response = base64.b64decode(rep + '==')
+        i = 0
+
+        while isLastChunk == "0.":
+            r = resolver.resolve(f'{rid}.next{i}.l', 'TXT', lifetime=10)
+            for j in r.response.answer:
+                for k in j.items:
+                    rep = k.to_text().replace('"', '')
+            isLastChunk, pencoded = rep[:2], rep[2:]
+            encoded += pencoded
+            i += 1
+
+
+        response = base64.b64decode(encoded + '==')
 
         self.send_response(200)
         self.end_headers()

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/coredns/coredns/plugin"
@@ -22,6 +21,7 @@ type HTTPOverDNS struct {
 
 var cache map[string]string = make(map[string]string)
 var history map[string]int = make(map[string]int)
+var sendQueue map[string][]string = make(map[string][]string)
 
 func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	state := request.Request{W: w, Req: r}
@@ -40,55 +40,73 @@ func (e HTTPOverDNS) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 
 		parts := strings.Split(strings.TrimSuffix(domain, ".l."), ".")
 
-		uid := parts[0]
-		isLastChunk := parts[1] == "1"
-		chunk := parts[2]
-
-		fmt.Println(parts)
-
-		chunks, exists := cache[uid]
-		if !exists {
-			chunks = ""
-		}
-
-		chunks += chunk
-
-		cache[uid] = chunks
-
-		var text []byte
-
-		if !isLastChunk {
-			text = []byte("OK")
-		} else {
-			var err error
-
-			text, err = decodeAndGetAnswer(chunks)
-
-			if err != nil {
-				text = []byte(err.Error())
-			}
-		}
-
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 
 		header := dns.RR_Header{Name: state.QName(), Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0}
 
-		if len(text) > 350 {
-			text = text[:350]
-		}
+		fmt.Println(parts)
 
-		rchunks := splitText(base64.RawStdEncoding.EncodeToString(text), 255)
+		if len(parts) == 2 {
+			queue, exists := sendQueue[parts[0]]
 
-		for _, rchunk := range rchunks {
-			txtRecord := &dns.TXT{Hdr: header, Txt: []string{rchunk}}
-			msg.Answer = append(msg.Answer, txtRecord)
+			if !exists {
+				txtRecord := &dns.TXT{Hdr: header, Txt: []string{"1."}}
+				msg.Answer = []dns.RR{txtRecord}
+			} else {
+				if len(queue) == 1 {
+					txtRecord := &dns.TXT{Hdr: header, Txt: []string{"1." + queue[0]}}
+					msg.Answer = []dns.RR{txtRecord}
+					delete(sendQueue, parts[0])
+				} else {
+					txtRecord := &dns.TXT{Hdr: header, Txt: []string{"0." + queue[0]}}
+					msg.Answer = []dns.RR{txtRecord}
+					sendQueue[parts[0]] = sendQueue[parts[0]][1:]
+				}
+			}
+		} else {
+
+			uid := parts[0]
+			isLastChunk := parts[1] == "1"
+			chunk := parts[2]
+
+			chunks, exists := cache[uid]
+			if !exists {
+				chunks = ""
+			}
+
+			chunks += chunk
+
+			cache[uid] = chunks
+
+			var text []byte
+
+			if !isLastChunk {
+				text = []byte("OK")
+			} else {
+				var err error
+
+				text, err = decodeAndGetAnswer(chunks)
+
+				if err != nil {
+					text = []byte(err.Error())
+				}
+			}
+
+			rchunks := splitText(base64.RawStdEncoding.EncodeToString(text), 250)
+
+			partBit := "1"
+
+			if len(rchunks) > 1 {
+				sendQueue[uid] = rchunks[1:]
+				partBit = "0"
+			}
+
+			txtRecord := &dns.TXT{Hdr: header, Txt: []string{partBit + "." + rchunks[0]}}
+			msg.Answer = []dns.RR{txtRecord}
 		}
 
 		w.WriteMsg(msg)
-
-		// fmt.Println("Answer lengths:" + len(msg.Answer))
-		fmt.Println("Answer length: " + strconv.Itoa(len(msg.Answer)))
 
 		return 0, nil
 
