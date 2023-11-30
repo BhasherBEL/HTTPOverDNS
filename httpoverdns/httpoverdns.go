@@ -131,7 +131,7 @@ func splitText(text string, n int) []string {
 }
 
 func decodeAndGetAnswer(encoded string) ([]byte, error) {
-	bdecoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(strings.TrimSuffix(encoded, ".l."), "_", "="))
+	bdecoded, err := base64.RawStdEncoding.DecodeString(strings.ReplaceAll(strings.TrimSuffix(encoded, ".l."), "_", "="))
 
 	if err != nil {
 		return nil, err
@@ -140,7 +140,6 @@ func decodeAndGetAnswer(encoded string) ([]byte, error) {
 	decoded := string(bdecoded)
 
 	req, err := ParseHTTPRequest2(decoded)
-	// req, err = http.NewRequest("GET", "http://httpforever.com", nil)
 
 	if err != nil {
 		return nil, err

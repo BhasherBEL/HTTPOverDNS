@@ -4,7 +4,7 @@ import shutil
 import dns.resolver
 import base64
 import random
-import time
+import ssl
 
 PORT = 1080
 
@@ -13,6 +13,33 @@ resolver.nameservers = ['127.0.0.1']
 
 def split_string_into_chunks(input_string, chunk_size):
     return [input_string[i:i + chunk_size] for i in range(0, len(input_string), chunk_size)]
+
+
+def send_and_receive(content, rid):
+    chunks = split_string_into_chunks(content, 53)
+
+    for i, chunk in enumerate(chunks):
+        domain = f'{rid}.{int(i == len(chunks)-1)}.{chunk}.l' 
+        r = resolver.resolve(domain, 'TXT', lifetime=10)
+    
+    for i in r.response.answer:
+        for j in i.items:
+            rep = j.to_text().replace('"', '')
+    
+    isLastChunk, encoded = rep[:2], rep[2:]
+
+    i = 0
+
+    while isLastChunk == "0.":
+        r = resolver.resolve(f'{rid}.next{i}.l', 'TXT', lifetime=10)
+        for j in r.response.answer:
+            for k in j.items:
+                rep = k.to_text().replace('"', '')
+        isLastChunk, pencoded = rep[:2], rep[2:]
+        encoded += pencoded
+        i += 1
+    
+    return encoded
 
 
 class HTTPProxy(BaseHTTPRequestHandler):
@@ -38,45 +65,28 @@ class HTTPProxy(BaseHTTPRequestHandler):
     def do_PUT(self):
         self.handle_request()
 
+    def do_CONNECT(self):
+        self.handle_request()
+
     def handle_request(self):
-        content = base64.b64encode(self.get_raw_request()).decode('utf-8').replace('=', '_')
+        try:
 
-        rid = random.randint(0, 99999)
+            content = base64.b64encode(self.get_raw_request()).decode('utf-8').replace('=', '')
+            rid = random.randint(0, 99999)
 
-        chunks = split_string_into_chunks(content, 53)
+            encoded = send_and_receive(content, rid)
+            response = base64.b64decode(encoded + '==')
 
-        # try:
-        for i, chunk in enumerate(chunks):
-            domain = f'{rid}.{int(i == len(chunks)-1)}.{chunk}.l' 
-            r = resolver.resolve(domain, 'TXT', lifetime=10)
-        
-        for i in r.response.answer:
-            for j in i.items:
-                rep = j.to_text().replace('"', '')
-        
-        isLastChunk, encoded = rep[:2], rep[2:]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(response)
 
-        i = 0
-
-        while isLastChunk == "0.":
-            r = resolver.resolve(f'{rid}.next{i}.l', 'TXT', lifetime=10)
-            for j in r.response.answer:
-                for k in j.items:
-                    rep = k.to_text().replace('"', '')
-            isLastChunk, pencoded = rep[:2], rep[2:]
-            encoded += pencoded
-            i += 1
-
-
-        response = base64.b64decode(encoded + '==')
-
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(response)
-
-        # except Exception as e:
-        #     self.send_error(500, str(e))
+        except Exception as e:
+            self.send_error(500, str(e))
 
 httpd = HTTPServer(('', PORT), HTTPProxy)
+# context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+# context.load_cert_chain(certfile="server-cert.pem", keyfile="server-key.pem")
+# httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
 print("Now serving at", PORT)
 httpd.serve_forever()
